@@ -1,0 +1,18 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: web
+    orgId: 1
+    url: https://prom-panoptes.robinradar.systems/
+    basicAuth: false
+    isDefault: true
+    editable: true
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: https://loki-panoptes.robinradar.systems/
+    jsonData:
+      maxLines: 1000
