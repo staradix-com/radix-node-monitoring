@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+
+## Traefik handles all HTTP requests for the services defined using Let's Encrypt.
+  traefik:
+    image: traefik:latest
+    container_name: ${HOSTNAME}-traefik
+    restart: ${RESTART}
+    command:
+      - "--log.level=DEBUG"
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--metrics.prometheus=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.${PROVIDER}.acme.dnschallenge=true"
+      - "--certificatesresolvers.${PROVIDER}.acme.dnschallenge.provider=${PROVIDER}"
+      - "--certificatesresolvers.${PROVIDER}.acme.dnschallenge.delayBeforeCheck=0"
+      - "--certificatesresolvers.${PROVIDER}.acme.dnschallenge.resolvers=${RESOLVER}"
+      - "--certificatesresolvers.${PROVIDER}.acme.email=${EMAIL}"
+      - "--certificatesresolvers.${PROVIDER}.acme.storage=/letsencrypt/acme.json"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}.${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certResolver=${PROVIDER}"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=api-auth"
+      - "traefik.http.routers.dashboard.middlewares=ip-whitelist"
+      # Prometheus
+      - "traefik.http.routers.prometheus.rule=Host(`${TRAEFIK_PROM_BACKEND}.${DOMAIN}`)"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.tls.certResolver=${PROVIDER}"
+      - "traefik.http.routers.prometheus.service=prometheus@internal"
+      - "traefik.http.routers.prometheus.middlewares=ip-whitelist"
+      # get md5 from htpasswd or http://www.htaccesstools.com/htpasswd-generator/
+      # and then double all $ to $$ to avoid docker-compose
+      # Default is: v@^5RKz4cEv5EvGkPcVgN2yw
+      - "traefik.http.middlewares.api-auth.basicauth.users=radix-node-admin:$$2y$$10$$hvV4lBKrxY6zhTmu5tet9uhgb1K0HTwC1gY911X.51jFsNy0XrC5C"
+      - "traefik.http.middlewares.ip-whitelist.ipwhitelist.sourcerange=127.0.0.1/32, 192.168.178.0/24, 10.0.0.0/8, ${NODE_ADMIN_IP}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-storage-1:/letsencrypt
+    environment: 
+      - TZ
+      - HETZNER_API_KEY
+      - AWS_ACCESS_KEY_ID
+      - AWS_REGION
+      - AWS_SECRET_ACCESS_KEY
+
+## Prometheus server
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${HOSTNAME}-prometheus-server
+    restart: ${RESTART}
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus-data-1:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.external-url=${EXTERNAL_WEB_URL}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus-server.entryPoints=websecure"
+      - "traefik.http.routers.prometheus-server.rule=Host(`${PROMETHEUS_HOSTNAME}.${DOMAIN}`)"
+      - "traefik.http.routers.prometheus-server.tls=true"
+      - "traefik.http.routers.prometheus-server.tls.certresolver=${PROVIDER}"
+      - "traefik.http.routers.prometheus-server.service=prometheus-server"
+      - "traefik.http.services.prometheus-server.loadBalancer.server.port=9090"
+    links:
+      - alertmanager:alertmanager
+
+## Prometheus Alertmanager will handle alerts based on Prometheus data.
+  alertmanager:
+    image: prom/alertmanager
+    container_name: ${HOSTNAME}-alertmanager
+    restart: ${RESTART}
+    volumes:
+      - ./alertmanager:/etc/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/config.yml"
+      - "--storage.path=/alertmanager"
+    environment: 
+      - EXTERNAL_WEB_URL
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.alertmanager.entryPoints=websecure"
+      - "traefik.http.routers.alertmanager.rule=Host(`${ALERTMANAGER_HOSTNAME}.${DOMAIN}`)"
+      - "traefik.http.routers.alertmanager.tls=true"
+      - "traefik.http.routers.alertmanager.tls.certresolver=${PROVIDER}"
+      - "traefik.http.routers.alertmanager.service=alertmanager"
+      - "traefik.http.services.alertmanager.loadBalancer.server.port=9093"
+
+## Node exporter keeps an eye on servers and their resources, and exposes them to Prometheus.
+  node-exporter:
+    image: prom/node-exporter
+    container_name: ${HOSTNAME}-node-exporter
+    restart: ${RESTART}
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command: 
+      - "--path.procfs=/host/proc" 
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.ignored-mount-points"
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nodeexporter.entryPoints=websecure"
+      - "traefik.http.routers.nodeexporter.rule=Host(`${EXPORTER_HOSTNAME}.${DOMAIN}`)"
+      - "traefik.http.routers.nodeexporter.tls=true"
+      - "traefik.http.routers.nodeexporter.tls.certresolver=${PROVIDER}"
+      - "traefik.http.routers.nodeexporter.service=nodeexporter"
+      - "traefik.http.services.nodeexporter.loadBalancer.server.port=9100"
+
+## Grafana visualises all of our collected metrics. 
+  grafana:
+    container_name: ${HOSTNAME}-grafana
+    restart: ${RESTART}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.entryPoints=websecure"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_HOSTNAME}.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.tls.certResolver=${PROVIDER}"
+      - "traefik.http.routers.grafana.service=grafana"
+      - "traefik.http.services.grafana.loadBalancer.server.port=3000"
+    image: grafana/grafana
+    environment:
+      # Init admin user.
+      - GF_SECURITY_ADMIN_USER
+      - GF_SECURITY_ADMIN_PASSWORD
+      # SMTP Settings.
+      - GF_SMTP_ENABLED
+      - GF_SMTP_HOST
+      - GF_SMTP_USER
+      - GF_SMTP_PASSWORD
+      # Server specifics.
+      - GF_SERVER_ROOT_URL
+      - GF_INSTALL_PLUGINS
+      # Auth settings, Google SSO.
+      - GF_AUTH_BASIC_ENABLED
+      - GF_AUTH_GOOGLE_ENABLED
+      - GF_AUTH_GOOGLE_AUTH_URL
+      - GF_AUTH_GOOGLE_TOKEN_URL
+      - GF_AUTH_GOOGLE_CLIENT_SECRET
+      - GF_AUTH_GOOGLE_CLIENT_ID
+      - GF_ALLOWED_DOMAINS
+      # Auth settings, auto-assign.
+      - GF_USERS_ALLOW_SIGN_UP
+      - GF_USERS_ALLOW_ORG_CREATE
+      - GF_USERS_AUTO_ASSIGN_ORG
+      - GF_USERS_AUTO_ASSIGN_ORG_ID
+      - GF_USERS_AUTO_ASSIGN_ORG_ROLE
+      - GF_USERS_VERIFY_EMAIL_ENABLED
+      - GF_USERS_DEFAULT_THEME
+      - GF_USERS_VIEWERS_CAN_EDIT
+    volumes:
+     - grafana-storage-1:/var/lib/grafana
+     - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+     - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+
+volumes:
+  traefik-storage-1:
+    driver: local
+  grafana-storage-1:
+    driver: local
+  prometheus-data-1:
+    driver: local
