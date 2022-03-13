@@ -1,0 +1,39 @@
+# Global config
+global:
+  scrape_interval: 10s
+
+rule_files:
+  - 'node_exporter.rules'
+  - 'prometheus_rules.rules'
+  - 'traefik.rules'
+
+alerting:
+  alertmanagers:
+  - scheme: http
+    path_prefix: "/"
+    static_configs:
+    - targets: ['ALERTMANAGER_HOSTNAME var from .env']
+
+scrape_configs:
+  - job_name: "node_exporter"
+    scheme: https
+    static_configs:
+    - targets: ['EXPORTER_HOSTNAME var from .env']
+
+  - job_name: "node_exporter_radix"
+    scheme: http
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['radix-node.domain.com:9100']
+
+  - job_name: "traefik"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    scheme: https
+    static_configs:
+    - targets: ['TRAEFIK_PROM_BACKEND var from .env']
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ['PROMETHEUS_HOSTNAME var from .env']
