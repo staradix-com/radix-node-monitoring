@@ -1,5 +1,6 @@
 # radix-node-monitoring
 Configures Grafana/Prometheus stack for monitoring Radix nodes. 
+Note: This is not tested yet. Will probably work fine, but some experience with Docker is nice. 
 
 ### How to set this up ###
 Since I don't like to tinker with my Radix node as soon as it runs, I use a different server to monitor it.
@@ -64,3 +65,4 @@ After that, these are the URLs, `$DOMAIN` should be replaced with your domain na
 ### I will add later: ###
 * Bash script to set the configuration values.
 * Non Traefik values
+* Test results and screenshots. 
